@@ -1,0 +1,1635 @@
+#!/bin/bash
+
+# Script name: vdr-installer  # To be put in your /usr/local/bin, chmod the script, then load it simply typing: vdr-installer
+
+# Dec__26_2009      (XINE 1.2_lib + vdpau)
+
+
+###############
+# Variables ### // EDIT AT YOUR OWN RISK ...
+###############
+
+XINE_1_2="true" # true = install Xine_lib_1.2, if false is used Xine_Vdpau(1.1lib) gonna be installed instead(works also with non vdpau video card)
+XINE_vdpau_Patch="on" # To apply vdpau patch to Xine-lib_1.2
+vdpau_ver="r286" # Set Vdpau patch version
+
+VideoCard="Nvidia" # Choices are: Nvidia or Ati (default="Nvidia")
+NV_VER="190.53" # Nvidia Driver version - Previously tested: 185.18.31 - 185.18.36
+
+# DVB driver # ( pre_s2api is used with vdr-1.6.0 and Ubuntu_8.04 )
+DVB_DRIVER="v4l-dvb" # Choices are: | s2-liplianin | v4l-dvb | v4l-endriss | v4l-Myth | pre_s2api |
+CW3K_PATCH="off" #(on, off) Need this patch for using your cw3k interface
+Nexus_NA_Firmware="true" # (true, false) to install Mod firmware for Hauppauge Nexus in NA
+Nexus_remote_control="false" # (true, false) To have you Nexus remote working with Vdr plugin remote-0.4.0       
+
+MAKE="make -j6" # To see the effect of different values of -j have, you can take a look at /var/log/vdr_install_log and check compile time.
+
+
+USR="vdr" # Choose what you want, Default user=vdr
+SRC='/usr/local/src'
+VDRSRC=''$SRC'/vdr/PLUGINS/src'
+CONFIGS_FILE="/usr/local/bin/vdr.conf" # future update
+
+VDR='vdr-1.7.10'                              # ftp://ftp.cadsoft.de/vdr/Developer And Now: ftp://ftp.tvdr.de/vdr/Developer
+VXINE='xine-0.9.3'                           # http://home.vrweb.de/rnissl
+XINE_UI='xine-ui-cvs-20090617220000.tar.bz2' # http://home.vrweb.de/rnissl
+PACKAGES=""$SRC"/packages"
+LOGFILE="/var/log/vdr_install_log"
+# SCRIPTS=""$SRC"/scripts"
+# ARCHIVES=""$SRC"/archives"
+
+TEMP='/tmp'
+SC_CHECK="/etc/vdr/plugins/sc/"
+BIN_CHECK="/etc/vdr/plugins/sc/nagra"
+TIMESTAMP=`date +%Y%m%d.%R`
+
+# Nscan variables
+V4LDVB="$SRC/v4l-dvb"
+CFGDIR="/etc/vdr"
+NSCAN="/usr/local/bin/nscan"
+CONF="channels.conf.$TIMESTAMP"
+channels="/etc/vdr/channels.conf"
+
+
+####################################################################
+#                                                                ###
+# PLUGINS VARIABLE--(enable, disable vdr plugins with this part) ### 
+#                                                                ###
+# Use: "on" to install, "off" to not install the plugin  ...     ###
+####################################################################
+
+lirc="on" #===> # Should be disable if you don't have a remote control
+#
+vdr_remote="on" # Should be disable if you don't have a remote control
+#
+xineliboutput="off"
+VDR_XINE="on"
+NAScan="off"
+osdteletext="off"
+femon="off"
+Skin_Enigma="off"
+Skin_Reel="off"
+SC="on"
+Soppalusikka_Skin="on"
+YAEPGHD="on"
+StreamDev="on"
+
+# Untested plugins(off by default not recommended to enable):
+vdr_setup="off" # the one to not enable.
+Reelchannelscan="off"
+dvdplugin="off"
+Channelswitcher="off"72b4df8a46a8.tar.bz2
+vdr_browse="off"
+
+####################################################################################
+press_enter()
+{
+echo "Press [enter] key to continue. . ."; read enterKey
+}
+
+exit_check()
+{
+if [ $? -ne 0 ]; then
+   echo "Install did not run successfully" >> $LOGFILE
+   echo "Install did not run successfully"; press_enter; exit 1
+else
+   echo "Install successful" >> $LOGFILE
+fi   
+}
+
+log_0_check()
+{
+if [ $? -ne 0 ]; then
+   echo "Did not run successfully" >> $LOGFILE
+else
+   echo "Run successfully" >> $LOGFILE
+fi   
+}
+
+
+timer_start()
+{
+BEGIN=$(date +%s)
+}
+
+
+timer_stop()
+{
+    NOW=$(date +%s)
+    let DIFF=$(($NOW - $BEGIN))
+    let MINS=$(($DIFF / 60))
+    let SECS=$(($DIFF % 60))
+    echo Time elapsed: $MINS:`printf %02d $SECS` >> $LOGFILE
+}
+
+line()
+{
+echo "-----------------------------------" >> $LOGFILE
+}
+
+
+sc_error_message()
+{
+echo "WARNING CAM_FILES CHECK FAILURE. Before loading VDR copy you camfiles to: /etc/vdr/plugins/sc & the 4 bin files to: /etc/vdr/plugins/sc/nagra"; echo ""; echo "*** Folder name is nagra not Nagra ***"; echo ""
+}
+
+sc_check()
+{
+if [ -f $SC_CHECK/SoftCam.Key ]; then
+    echo "OK, SoftCam.Key FILE IS THERE"
+else
+    echo ""; sc_error_message
+fi
+
+if [ -f $BIN_CHECK/ROM102.bin ]; then
+    echo "OK, ROM102.bin FILE IS THERE"
+else
+    echo ""
+fi
+}
+
+##############################################################
+
+
+
+
+# Make sure only root can run the script -----------#
+if [ "$(id -u)" != "0" ]; then
+   echo "This script must be run as root" 1>&2
+   exit 1
+fi
+#---------------------------------------------------#
+
+
+# Check for the script configuration file -----------#
+#if [ -f ${CONFIGS_FILE} ]; then
+#    echo "OK, vdr.conf located in /usr/local/bin"; else
+#    echo "ERROR: You must have ${CONFIGS_FILE}"; exit 1
+
+#fi
+
+#. ${CONFIGS_FILE} || exit 1
+#---------------------------------------------------#
+
+
+#version_check
+version=$( cat /etc/issue | grep 9.04 >/dev/null && echo 9.04 || (cat /etc/issue | grep 9.10 >/dev/null && echo 9.10 || echo "Unsupported version of Ubuntu") )
+
+if [[ "$version" = "9.04" || "$version" = "9.10" ]]; then
+    echo "Ubuntu $version"
+else
+    exit 1
+fi
+#---------------------------------------------------#
+
+# Print some infos in install log: /usr/local/src/vdr_install_log # PLZ check the install log for errors if you have problem installing
+echo "" >> $LOGFILE; echo "Started:" >> $LOGFILE; date >> $LOGFILE
+uname -r -m >> $LOGFILE; echo "Ubuntu $version" "As:$USER" >> $LOGFILE
+cat /proc/cpuinfo | grep -i "model name" >> $LOGFILE; line
+
+# User to be used with vdr created(Default=vdr):
+sudo useradd $USR -g video -d /home/$USR -s /bin/bash -m
+if cat /etc/sudoers |grep "$USR ALL=(ALL) ALL"; then
+    echo "OK"
+else
+    echo "$USR ALL=(ALL) ALL" >> /etc/sudoers
+fi
+
+# Some folders
+mkdir $SRC/packages      # $SRC/archives $SRC/scripts $SRC/READ_THIS
+
+
+while :
+do
+    clear
+    echo "-------------------------------------"
+    echo "     VDR Install script "
+    echo "-------------------------------------"
+    echo "[1]  Ubuntu Gnome base install"
+    echo "[2]  $DVB_DRIVER drivers"
+    echo "[2.1] Remove Dvb Driver"
+    echo "[3]  Nvidia 32 & 64bit: $NV_VER"
+    echo "[3.1]Remove Nvidia Driver"
+    echo "====================================="
+    echo "[4]   Xine-Lib-1.2 & XINE-UI"
+    echo "[4.1] Remove Xine-Lib-1.2 & XINE-UI"
+    echo "=============================================="
+    echo "[5]   $VDR & plugins & configurations"
+    echo "[5.1] Remove VDR & plugins & configurations"
+    echo "====================================="
+    echo "[6]   Nscan-2.0.7 scanner for NA"
+    echo "[6.1] Remove Nscan-2.0.7"
+    echo "====================================="
+    echo "[7] Exit/Stop"
+    echo "====================================="
+    echo -n "Enter your menu choice [1-7]: "
+    read yourch
+    case $yourch in
+
+########### #
+1) # GNOME ### # DO NOT EXECUTE THIS OPTION ON A FULL UBUNTU DESKTOP INSTALL
+########### # Complete the base Ubuntu Install(Gnome) and more
+
+timer_start; echo "[1] Gnome" >> $LOGFILE
+apt-get update -y # nano /etc/apt/sources.list && apt-get update -y
+apt-get install -y gnome-core gdm network-manager-gnome human-theme
+apt-get install -y x11-xserver-utils jockey-gtk tangerine-icon-theme fast-user-switch-applet
+apt-get install -y gnome-themes-ubuntu ubuntu-artwork gnome-utils gcalctool tsclient
+apt-get install -y firefox file-roller gftp gdebi system-config-samba evince ubuntu-restricted-extras
+# Some optional apps that ###
+# SSH support: - Comment uncomment next line to install it or not.
+apt-get install -y ssh
+# Putty -free telnet/ssh client
+apt-get install -y putty
+# Brasero disc Burner
+apt-get install -y brasero
+#---------------------------------------------------------------------------------#
+
+
+if [ "$version" = "9.04" ]; then  
+  # Ubuntu 9.04 gdm autologin=ON
+  sed -i "s/AutomaticLoginEnable=false/AutomaticLoginEnable=true/" /etc/gdm/gdm.conf
+  sed -i "s/AutomaticLogin=/AutomaticLogin=$USR/" /etc/gdm/gdm.conf
+else
+  if [ -f /etc/gdm/custom.conf ]; then                                                                                                                                                   
+    echo "OK"                                                                         
+                                                                          else                                                                                                                                                                                                     
+    # Updated for 9.10 gdm autologin; http://lani78.wordpress.com/2009/07/30/gnome-auto-login-in-ubuntu-9-10-karmic-koala-alpha-3/
+    echo ""; echo "Building /etc/gdm/custom.conf"
+    echo "[daemon]
+          AutomaticLoginEnable=true
+          AutomaticLogin=$USR" >> /etc/gdm/custom.conf
+
+
+  fi
+fi
+
+#---------------------------------------------------------------------------------#
+
+###########################################################
+# STATIC IP SETTINGS #############
+# Can set static ip with this next variables: #############
+###########################################################
+
+STATIC_IP="false" # true, false //
+address="10.0.0.250" # Choose the ip address you want to use ex.: 192.168.0.xyz
+netmask="255.255.255.0" # ex.: 255.255.255.0
+network="10.0.0.1" # ex.: 192.168.0.0
+broadcast="10.0.0.255" # ex.: 192.168.0.255
+gateway="10.0.0.1" # ex.: 192.168.0.1
+
+if [ $STATIC_IP = "true" ]; then
+echo "Static ip settings" >> $LOGFILE
+if [ ! -f /etc/network/interfaces_BAK ]; then
+cp /etc/network/interfaces /etc/network/interfaces_BAK
+sed -i "s/iface eth0 inet dhcp/#iface eth0 inet dhcp/" /etc/network/interfaces
+echo "# Next part have been auto-generated by Vdr install script
+iface eth0 inet static
+address $address
+netmask $netmask
+network $network
+broadcast $broadcast
+gateway $gateway" >> /etc/network/interfaces && /etc/init.d/networking restart
+fi
+else
+echo "Network = dhcp or already Configured" >> $LOGFILE
+fi
+#-----------------------------------------------------------------------------------#
+
+log_0_check; timer_stop; line
+;;
+
+   ############################
+2) # V4L-DVB DRIVER INSTALL ###
+   ############################
+timer_start; echo "[2]  V4l-dvb drivers" >> $LOGFILE
+dmesg | grep -i dvb; sleep 2;
+
+#build-essential dpkg-dev g++ g++-4.2 libc6-dev libstdc++6-4.2-dev libtimedate-perl
+#  linux-libc-dev mercurial patch
+apt-get install -y mercurial build-essential linux-headers-`uname -r`
+
+#apt-get source linux-image-`uname -r`
+
+#######################
+# Variables V4l-dvb ###
+#######################
+V4L='/media/KINGSTON/drivers/v4l-dvb.tar.bz2' # Using this to don't have to re-download the driver all the time
+USB='/media/KINGSTON' # = my usb flash drive, you don't have to edit this one, script gonna ignore this variable anyway.
+#
+
+
+    cd $SRC
+#    wget http://linuxtv.org/hg/v4l-dvb/archive/aa56a9c21b61.tar.bz2 # May 17 2009 version
+#    tar -xivf aa56a9c21b61.tar.bz2; mv v4l-dvb-aa56a9c21b61 v4l-dvb # ///////////////////
+
+
+# Some Dvb drivers ...
+if [ $DVB_DRIVER = "s2-liplianin" ]; then
+   hg clone http://mercurial.intuxication.org/hg/s2-liplianin/; mv s2-liplianin v4l-dvb; else
+     if [ $DVB_DRIVER = "v4l-dvb" ]; then
+        hg clone http://linuxtv.org/hg/v4l-dvb; else
+        #wget http://linuxtv.org/hg/v4l-dvb/archive/72b4df8a46a8.tar.bz2; tar xivf 72b4df8a46a8.tar.bz2; mv v4l-dvb-* v4l-dvb; else
+          if [ $DVB_DRIVER = "v4l-Myth" ]; then
+              hg clone http://linuxtv.org/hg/v4l-dvb
+              sed -i "s/FE_CAN_INVERSION_AUTO |/& FE_CAN_2G_MODULATION |/" /usr/local/src/v4l-dvb/linux/drivers/media/dvb/dvb-usb/gp8psk-fe.c; else
+                if [ $DVB_DRIVER = "v4l-endriss" ]; then
+                   wget http://linuxtv.org/hg/~endriss/v4l-dvb/archive/tip.tar.bz2
+                   tar xivf tip.tar.bz2; mv v4l-dvb-* v4l-dvb; else
+                   if [ $DVB_DRIVER = "pre_s2api" ]; then
+                      wget http://www.hoochvdr.info/files/v4l_1_gpfix.20080606.1.diff
+                      wget http://www.hoochvdr.info/files/v4l_2_gp_8psk.20080508.1.diff
+                      hg clone -r 8984 http://linuxtv.org/hg/v4l-dvb
+                      cd v4l-dvb
+                      patch -p1 < /usr/local/src/v4l_1_gpfix.20080606.1.diff
+                      patch -p1 < /usr/local/src/v4l_2_gp_8psk.20080508.1.diff
+                      cd ..
+                   else
+                      echo "Could you plz select a driver that is listed ?"; press_enter
+                   fi
+               fi
+           fi
+     fi
+fi
+###############                                               
+# CW3K PATCH ##
+###############
+cw3k_diff="gp_cw3k_s2api_3b.diff" # Choices: 8psk.diff, gp_cw3k_s2api_3b.diff or gp_cw3k_s2api.diff
+
+if [ "$CW3K_PATCH" = "on" ]; then
+  cp /home/$USR/Desktop/$cw3k_diff $SRC || cp $USB/patches/$cw3k_diff $SRC
+  echo "Cw3K_S2API Patching enable" >> $LOGFILE
+   # CHECK FOR gp_cw3k_s2api_3b patch: YOU MUST DOWNLOAD IT FIRST BEFORE INSTALLING:link to the patch:http://evilshare.com/7d2yzl61432l/gp_cw3k_s2api_3b.diff.html
+   if [ -f $SRC/$cw3k_diff ]; then
+     echo "OK"; cd v4l-dvb; patch -p1 < $SRC/$cw3k_diff; else # //ADD CHECK FOR PATCH ALREADY APPLIED
+     echo "cw3k_check FAILED" >> $LOGFILE
+     clear; echo ""
+     echo "##############################################################################################"
+     echo "# ---------------!!! COULD NOT DETECT CW3K PATCH ...!!!"
+     echo "# - YOU MUST DOWNLOAD THE PATCH BEFORE COMPILING ...!!!"
+     echo "#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+     echo "# - Link to the patch is: http://evilshare.com/7d2yzl61432l/gp_cw3k_s2api_3b.diff.html"
+     echo "# - DOWNLOAD THE PATCH WITH MOZILLA TO YOUR DESKTOP AND THEN RE-EXECUTE THIS INSTAL STEP"
+     echo "##############################################################################################"
+     echo ""   
+     press_enter; exit 1
+   fi
+  else
+echo "Cw3K Patching skipped" >> $LOGFILE
+fi
+    cd v4l-dvb 
+
+    # TUNING TWEAK FOR GENPIX  ################################################################################                                           
+#    sed -i "s/tune->min_delay_ms = 200/tune->min_delay_ms = 800/" linux/drivers/media/dvb/dvb-usb/gp8psk-fe.c
+    ###########################################################################################################
+
+
+if [ ! $DVB_DRIVER = "pre-s2api" ]; then
+    ##########################################
+    # ALLOW QPSK and 8PSK ON GENPIX DEVICES ##
+    ##########################################
+    sed -i "s/Only QPSK is supported for DVB-S/Allow QPSK and 8PSK/" linux/drivers/media/dvb/dvb-usb/gp8psk-fe.c
+    sed -i "s/modulation != QPSK/& \&\& c->modulation != PSK_8/" linux/drivers/media/dvb/dvb-usb/gp8psk-fe.c
+    ###################################################################################################################################
+else
+    echo "sed command to enable 8PSK skipped"
+fi
+
+# 2.6.31 FIREDTV TEMP FIX = DISABLING THIS ONE # 
+# The real fix is to install the kernel source and then modify the makefile configuration options to use this one instead of the Kernel headers.
+if [ "$version" = "9.10" ]; then
+  # make config
+  apt-get install -y libncurses5-dev
+  clear; echo ""; echo ""; echo ""; echo ""; echo ""; echo ""; echo ""; echo ""; echo ""; echo ""; echo ""; echo ""
+  echo "####################################################################"
+  echo "### Simply Exit & Save to generate $SRC/v4l-dvb/v4l/.config file ###"
+  echo "####################################################################"
+  press_enter
+  make menuconfig; sed -i "s/FIREDTV=m/FIREDTV=n/" $SRC/v4l-dvb/v4l/.config
+else
+   echo "2.6.31 FIREDTV FIX NOT APPLIED"
+fi
+
+
+$MAKE && make install && depmod -a
+exit_check; timer_stop; line
+
+# NEXUS NA FIRMWARE #----------------------------------------------------------#
+if [ "$Nexus_NA_Firmware" = "true" ]; then
+   cd $SRC; wget http://www.hoochvdr.info/files/dvb-ttpci-01.fw-f12623-070121-cr
+   mv /lib/firmware/dvb-ttpci-01.fw /lib/firmware/dvb-ttpci-01.fw_BAK
+   mv dvb-ttpci-01.fw-f12623-070121-cr /lib/firmware/dvb-ttpci-01.fw
+fi
+#-----------------------------------------------------------------------------#
+
+;;
+
+
+     #####################
+2.1) # Remove Dvb Driver #
+     #####################
+cd $SRC/v4l-dvb; make rminstall; make clean; make distclean; cd ..; rm -r v4l-dvb
+;;
+
+   ###############################
+3) # NVIDIA DRIVER 32 & 64 bit ###
+   ###############################
+NV='NVIDIA-Linux-x86-'$NV_VER'-pkg1.run'
+NV64="NVIDIA-Linux-x86_64-"$NV_VER"-pkg1.run"
+
+timer_start; echo "[3]  Nvidia 32 & 64bit: $NV_VER" >> $LOGFILE
+
+apt-get install -y mercurial build-essential linux-headers-`uname -r`
+# cp $USB/drivers/$NV /$SRC
+
+
+cd $SRC; /etc/init.d/gdm stop || /etc/init.d/xdm stop
+if uname -m |grep "x86_64"; then
+   echo "64bit"
+   nvidia="x86_64/"$NV_VER"/NVIDIA-Linux-x86_64-"$NV_VER"-pkg1.run"
+   wget ftp://download.nvidia.com/XFree86/Linux-$nvidia || echo "Nvidia driver dl failure!!!" >> $LOGFILE
+   sh $NV64
+else
+   echo "32bit"
+   nvidia="x86/"$NV_VER"/NVIDIA-Linux-x86-"$NV_VER"-pkg1.run"
+   wget ftp://download.nvidia.com/XFree86/Linux-$nvidia || echo "Nvidia driver dl failure!!!" >> $LOGFILE
+   sh $NV
+fi
+
+  log_0_check; timer_stop; line
+  nvidia-xconfig
+
+;;
+
+     ##########################
+3.1) # Remove Nvidia Driver ###
+     ##########################
+NV='NVIDIA-Linux-x86-'$NV_VER'-pkg1.run'
+NV64="NVIDIA-Linux-x86_64-"$NV_VER"-pkg1.run"
+
+cd $SRC
+# 64_bit_check
+if uname -m | grep "x86_64"; then
+    echo "64bit"; sh $NV64 --uninstall
+    echo "32bit"; sh $NV --uninstall
+fi
+
+#dpkg-reconfigure -phigh xserver-xorg
+#apt-get install xserver-xorg-video-all
+#rm /usr/src/nvidia-driver /usr/src/NVIDIA-Linux-185.pkg.run /etc/kernel/postinst.d/update-nvidia
+;;
+
+
+   ################
+4) # XINE-LIB-1.2 #
+   ################
+
+timer_start; echo "[4.2] XINE-LIB-1.2" >> $LOGFILE
+
+if [ -f $PACKAGES/libxine2*.deb ]; then
+    echo "Package is there, skip compilation(rename the .deb to bypass the check)" >> $LOGFILE
+    echo "Package is there, skip compilation(rename the .deb to bypass the check)"; press_enter
+else   
+  if [ "$lirc" = "on" ]; then
+    apt-get install -y lirc lirc-modules-source lirc-x liblircclient-dev
+  else
+    echo "lirc skipped" >> $LOGFILE
+  fi
+
+    apt-get install -y mercurial cvs subversion libncurses-dev zlib1g-dev libcdio-dev
+    apt-get install -y libvcdinfo-dev
+
+
+    apt-get install -y autoconf automake pkg-config gettext checkinstall libtool 
+    apt-get install -y libavcodec-dev libpostproc-dev
+
+
+    apt-get install -y liba52-0.7.4-dev libmp3lame-dev libvorbis-dev libpng12-dev libx11-dev libxv-dev libasound2-dev
+# Enable medibuntu repo. + Dvd playback
+    wget http://www.medibuntu.org/sources.list.d/`lsb_release -cs`.list --output-document=/etc/apt/sources.list.d/medibuntu.list
+    apt-get -q update; apt-get --yes -q --allow-unauthenticated install medibuntu-keyring
+    apt-get -q update && apt-get install -y libdvdcss2 libdvdnav4 libdvdnav-dev
+    sudo /usr/share/doc/libdvdread4/install-css.sh
+                                                                                  
+       # NVIDIA DRIVER CHECK (To make sure vdpau got enabled properly) 
+       if [ "$VideoCard" = "Nvidia" ]; then
+          echo "NV"; dmesg | grep -i NVIDIA >> $LOGFILE
+            if cat $LOGFILE | grep "loading NVIDIA UNIX"; then
+               echo "NV driver Detected"; else
+               echo "Install Nvidia driver before this step" >> $LOGFILE
+               echo "Install Nvidia driver before this step"; press_enter; exit 1
+            fi
+
+        else
+           echo "Nvidia_check-bypassed" >> $LOGFILE
+
+       fi
+
+
+cd $SRC
+apt-get install -y libcdio-dev libvcdinfo-dev libmpcdec-dev
+hg clone http://hg.debian.org/hg/xine-lib/xine-lib-1.2
+#hg clone http://hg.debian.org/hg/xine-lib/xine-lib-1.2 xine-lib-1.2_16.09.2009
+wget http://www8.mplayerhq.hu/MPlayer/releases/codecs/essential-20071007.tar.bz2
+tar xivf essential-20071007.tar.bz2
+mv essential-20071007 /usr/local/lib/win32
+ln -s /usr/local/lib/win32 /usr/local/lib/codecs
+
+   if [ $XINE_vdpau_Patch = "on" ]; then
+      wget http://www.jusst.de/vdpau/files/xine-lib-1.2/xine-lib-1.2-vdpau-$vdpau_ver.diff.bz2
+      bunzip2 xine-lib-1.2-vdpau-$vdpau_ver.diff.bz2
+      cd xine-lib-1.2
+      patch -p1 < ../xine-lib-1.2-vdpau-$vdpau_ver.diff; echo "Vdpau patch" >> $LOGFILE; log_0_check; cd ..
+     else
+      echo "No_VdpauPatch applied"
+   fi
+
+cd xine-lib-1.2
+./autogen.sh --prefix=/usr --disable-dxr3 --enable-w32dll --with-w32-path=/usr/local/lib/win32
+$MAKE && checkinstall --fstrans=no --install=yes --pkgname=libxine2-dev --pkgversion "1.2.svn`date +%Y%m%d`-12ubuntu3" --default && ldconfig
+log_0_check; timer_stop; line
+nvidia-xconfig
+mv libxine2*.deb $PACKAGES
+make clean; make distclean
+
+fi
+#############
+# XINE-UI ###
+#############
+timer_start; echo "[4] Xine-ui" >> $LOGFILE
+if [ -f $SRC/xine-ui/xine-ui*.deb ]; then
+    echo "Package is there, skip compilation"
+else # compile
+    cd $SRC
+
+
+if [ "$version" = "9.10" ]; then
+    clear; echo ""; echo ""
+    echo "##########################"
+    echo "### Simply Press Enter ###"
+    echo "##########################"
+    cvs -d:pserver:anonymous@xine.cvs.sourceforge.net:/cvsroot/xine login
+    cvs -z3 -d:pserver:anonymous@xine.cvs.sourceforge.net:/cvsroot/xine co -P xine-ui
+else
+    wget http://home.vrweb.de/rnissl/$XINE_UI || echo "$XINE_UI dl failure!!!"
+    tar -jxf$XINE_UI
+fi
+
+    apt-get install -y libxt-dev # libtool automake autoconf libextractor-dev
+    cd xine-ui
+./autogen.sh --prefix=/usr --enable-lirc --enable-vdr-keys 
+$MAKE && checkinstall --fstrans=no --install=yes --pkgname=xine-ui --pkgversion "0.99.6`date +%Y%m%d`-12ubuntu3" --default && ldconfig
+       
+fi
+
+  log_0_check; timer_stop; line
+  mv xine-ui*.deb $PACKAGES
+
+;;
+
+
+     #########################################
+4.1) # Remove XINE-LIB VDPAU & XINE-UI ###
+     #########################################
+dpkg -r xine-ui libxine2-dev libxine1
+apt-get remove --purge -y lirc lirc-modules-source lirc-x liblircclient-dev
+cd $SRC; rm -r xine-ui xine-vdpau xine-lib xine-lib-1.2 essential-20071007 $VXINE
+rm xine-lib-1.2-vdpau$VDPAU.diff xine-ui*.tar.bz2 vdr-1.5.9-dn-eit.0.3.3.diff xine-lib-*.tar.bz2 essential-20071007.tar.bz2 $VXINE.tgz
+rm $PACKAGES/xine-ui*.deb
+rm $PACKAGES/libxine2*.deb
+rm $PACKAGES/libxine1*.deb
+echo "[8] Remove XINE-LIB VDPAU 1.2 & XINE-UI" >> $LOGFILE
+echo "Finished:" >> $LOGFILE; date >> $LOGFILE; line
+;;
+
+
+
+     #########################################
+4.1) # Remove XINE-LIB VDPAU 1.1 & XINE-UI ###
+     #########################################
+dpkg -r xine-ui libxine2-dev libxine1
+apt-get remove --purge -y lirc lirc-modules-source lirc-x liblircclient-dev
+cd $SRC; rm -r xine-ui xine-vdpau xine-lib xine-lib-1.2 essential-20071007 $VXINE
+rm xine-lib-1.2-vdpau$VDPAU.diff xine-ui*.tar.bz2 vdr-1.5.9-dn-eit.0.3.3.diff xine-lib-*.tar.bz2 essential-20071007.tar.bz2 $VXINE.tgz
+rm $PACKAGES/xine-ui*.deb
+rm $PACKAGES/libxine2*.deb
+rm $PACKAGES/libxine1*.deb
+echo "[8] Remove XINE-LIB VDPAU 1.2 & XINE-UI" >> $LOGFILE
+echo "Finished:" >> $LOGFILE; date >> $LOGFILE; line
+;;
+
+
+
+   ###############
+5) # VDR-1.7.x ###
+   ###############
+   
+    timer_start; echo "[5] $VDR" >> $LOGFILE
+# v4l-dvb_check
+if [ -d $SRC/v4l-dvb ]
+then
+    echo "Looks like v4l-dvd driver is installed"
+else
+    echo "Looks like v4l-dvb driver isn't install, install it first"; press_enter; exit 0
+    echo "Looks like v4l-dvb driver isn't install, install it first"; >> $LOGFILE
+fi
+
+# libxine_check
+if [ -f $PACKAGES/libxine2*.deb ]; then
+    echo "libxine check ok"
+else
+    echo "Must compile Xine before Vdr" >> $LOGFILE
+    echo "Must compile Xine before Vdr"; press_enter; exit 0
+fi
+   
+    apt-get install -y build-essential; echo ""; echo "*** Installing VDR ***"; echo ""
+    cd $SRC; apt-get install -y checkinstall libfreetype6-dev libfontconfig1-dev libjpeg62-dev libcap-dev libncurses5-dev libncursesw5-dev git-core gettext #libttf2 fontconfig
+    wget ftp://ftp.tvdr.de/vdr/Developer/$VDR.tar.bz2; tar xivf $VDR.tar.bz2; ln -s $VDR vdr
+    #wget http://www.zulu-entertainment.de/page/klick.php?d=VDR+Extensions+Patch; tar xivf VDR-Extensions-Patch-*.tar.bz2
+    #patch -p1 < ../VDR-Extensions-Patch-71/vdr-1.7.5_extensions.diff; patch -p1 < ../VDR-Extensions-Patch-71/extras/vdr-1.7.5-ext_speedup.diff
+    # **** vdr-1.5.9-dn-eit.0.3.3.diff (need only if your provider is Dish network.
+    ################################################################################
+
+    wget http://www.fepg.org/patches/eit/vdr-1.5.9-dn-eit.0.3.3.diff || echo "dn-eit.diff DL failure!!!" >> $LOGFILE
+    git clone git://projects.vdr-developer.org/vdr-plugin-yaepghd.git || git clone git://projects.vdr-developer.org/vdr-plugin-yaepghd.git || echo "yaepghd DL failure!!!" >> $LOGFILE
+
+    cd vdr; patch -p1 < ../vdr-plugin-yaepghd/patches/vdr-1.6.0-yaepghd.patch; patch -p1 < ../vdr-1.5.9-dn-eit.0.3.3.diff; sleep 3
+    sudo cp /usr/src/linux-headers-`uname -r`/include/linux/compiler.h /usr/local/src/v4l-dvb/linux/include/linux/compiler.h
+    cp Make.config.template Make.config
+
+
+# s/#SETUP = 1/SETUP = 1/
+sed -i '
+s/#DVBDIR/DVBDIR/
+s|/usr/src/v4l-dvb/linux|/usr/local/src/v4l-dvb/linux|
+s|./locale|/usr/share/locale|
+s|$(PLUGINDIR)/lib|/usr/lib/vdr/plugins|
+s|/video|/media/video|
+s|$(VIDEODIR)|/etc/vdr|' Make.config
+
+# DVB_API_VERSION_5.1 Temp_FIX
+# sed -i 's/|| DVB_API_VERSION_MINOR != 0//' dvbdevice.h
+
+# nano Make.config
+
+# 64_bit_check
+if uname -m | grep "x86_64"; then
+    echo "64bit"; sed -i 's/-D_LARGEFILE64_SOURCE/& -D__KERNEL_STRICT_NAMES/' /usr/local/src/vdr/Makefile
+else
+    echo "32bit"
+fi
+
+#    cd $VDRSRC; rm -r hello osddemo servicedemo sky svdrpdemo status pictures skincurses
+    $MAKE && make plugins && sudo checkinstall --fstrans=no --install=yes --pkgname=vdr --pkgversion "$VDR-5ubuntu2-0" --default
+    log_0_check
+    cd $SRC; sudo mkdir -p /usr/lib/vdr/plugins; sudo mkdir -p /usr/lib/vdr/scripts; sudo mkdir -p /etc/vdr/plugins           
+    timer_stop; line
+
+
+
+
+#########################################
+#                                    ####
+#  SOME VDR START AND STOP SCRIPTS    ###
+#########################################
+
+#############################################
+# AutoStartup(works with Ubuntu & Xbuntu) ###
+#############################################
+
+    cd /home/$USR
+    mkdir .config/autostart
+    echo '[Desktop Entry]
+          Encoding=UTF-8
+          Version=0.9.9
+          Type=Application
+          Name=Vdr-Xine
+          Comment=
+          Exec=xine --no-splash -f -D --verbose=2 -A alsa -L --post vdr_video --post vdr_audio --post upmix_mono "vdr:/tmp/vdr-xine/stream#demux:mpeg_pes"
+          StartupNotify=false
+          Terminal=false
+          Hidden=false' >> .config/autostart/Vdr-Xine.desktop
+
+
+
+##########################################################
+# VDRRUN (vdr start-up script)(Xine-VDPAU & Xine-lib) ####  # MUST BE ROOT TO LOAD VDR WITH COMMAND: vdrrun #######
+##########################################################                                                                                                                                                     
+if [ -f /usr/local/bin/vdrrun ]; then                                                                                                                                                     
+    echo "OK"                                                                         
+                                                                             
+else                                                                                                                                                                                                     
+    echo ""; echo "Building vdrrun"                                                                                                                                                                       
+    echo "#!/bin/sh                                                                                                                                                                                     
+#file name: vdrrun
+
+/usr/local/bin/vdr -c /etc/vdr -E /var/vdr -l 3 -u root -s /usr/local/bin/vdrpoweroff &
+
+until [ -e \"/tmp/vdr-xine/stream\" ]; do sleep 1; done
+
+xine --no-splash -f -D --verbose=2 -A alsa -L --post vdr_video --post vdr_audio --post upmix_mono \"vdr:/tmp/vdr-xine/stream#demux:mpeg_pes\" &" >> /usr/local/bin/vdrrun
+   
+chmod a+x /usr/local/bin/vdrrun
+fi
+#################
+# VDRPOWEROFF ### // Command line to Turn OFF Vdr + Pc = vdrpoweroff
+#################
+if [ -f /usr/local/bin/vdrpoweroff ]; then                                                                                                                                                   
+    echo "OK"                                                                         
+                                                                          else                                                                                                                                                                                                     
+    echo ""; echo "Building vdrpoweroff"
+    echo "#!/bin/bash
+
+/sbin/poweroff" >> /usr/local/bin/vdrpoweroff
+
+chmod a+x /usr/local/bin/vdrpoweroff
+fi
+
+
+#####################
+# /etc/init.d/vdr ###
+#####################
+if [ -f /etc/init.d/vdr ]; then
+    echo "OK"
+else
+    echo "building runvdr"
+
+echo '#!/bin/sh
+
+# To be copied to: /etc/init.d
+# And type:
+### BEGIN INIT INFO
+# Provides:          VDR
+# Required-Start:   
+# Required-Stop:     
+# Default-Start:     0 1 2 3 4 5 6
+# Default-Stop:     
+# Description:       Start, Stop or Restart VDR
+### END INIT INFO
+
+# Shell functions sourced from /etc/rc.status:
+set -e
+
+# Reset status of this service
+# rc_reset
+#
+echo "Vdr init.d script using: $1" >> /var/log/vdr.log &
+case "$1" in
+    start)
+        echo -n "Starting VDR "
+   /usr/local/bin/runvdr >> /var/log/vdr.log &
+        # Remember status and be verbose
+        ;;
+    stop)
+        echo -n "Shutting down VDR "
+   killall runvdr
+   killall vdr
+        # Remember status and be verbose
+        ;;
+    restart)
+        echo -n "Restart VDR "
+        $0 stop
+        $0 start
+
+        # Remember status and be quiet
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+# rc_exit
+exit 0' >> /etc/init.d/vdr
+
+chmod a+x /etc/init.d/vdr; update-rc.d vdr defaults
+fi
+
+############
+# RUNVDR ###
+############
+
+mv /usr/local/bin/runvdr /usr/local/bin/runvdr.$TIMESTAMP
+echo '#!/bin/bash
+
+# runvdr: Loads the DVB driver and runs VDR
+#
+# If VDR exits abnormally, the driver will be reloaded
+# and VDR restarted.
+#
+# In order to actually use this script you need to implement
+# the functions DriverLoaded(), LoadDriver() and UnloadDriver()
+# and maybe adjust the VDRPRG and VDRCMD to your particular
+# requirements.
+#
+# Since this script loads the DVB driver, it must be started
+# as user root. Add the option "-u username" to run VDR
+# under the given user name.
+#
+# Any command line parameters will be passed on to the
+# actual vdr program.
+#
+# See the main source file vdr.c for copyright information and
+# how to reach the author.
+#
+# $Id: runvdr 2.0 2006/05/14 16:02:05 kls Exp $
+
+VDRPRG="/usr/local/bin/vdr"
+VDRCMD="$VDRPRG -c /etc/vdr -E /var/vdr -l 3 -s /usr/local/bin/vdrpoweroff -u root $*"
+
+KILL="/usr/bin/killall -q -TERM"
+
+# Detect whether the DVB driver is already loaded
+# and return 0 if it *is* loaded, 1 if not:
+DriverLoaded()
+{
+  return 0
+}
+
+# Load all DVB driver modules needed for your hardware:
+LoadDriver ()
+{
+
+  return 0
+
+}
+
+# Unload all DVB driver modules loaded in LoadDriver():
+UnloadDriver ()
+{
+
+  return 0
+
+}
+
+# Load driver if it hasnt been loaded already:
+if ! DriverLoaded; then
+   LoadDriver
+   fi
+
+while (true) do
+      eval "$VDRCMD"
+      if test $? -eq 0 -o $? -eq 2; then exit; fi
+      echo "`date` reloading DVB driver"
+      $KILL $VDRPRG
+      sleep 10
+      UnloadDriver
+      LoadDriver
+      echo "`date` restarting VDR"
+      done' >> /usr/local/bin/runvdr
+
+chmod a+x /usr/local/bin/runvdr
+
+
+
+###########################
+#                       ###
+#      VDR PLUGINS      ###
+#                       ###
+###########################
+timer_start; echo "vdr plugins" >> $LOGFILE
+
+
+if [ $vdr_setup = "on" ]; then
+#cp -r $SRC/setup-0.3.1-zulu-edition $VDRSRC
+cd $VDRSRC
+wget http://www.zulu-entertainment.de/files/vdr-setup/vdr-setup-0.3.1-zulu-edition.tgz
+tar zxvf vdr-setup-0.3.1-zulu-edition.tgz
+mv setup-0.3.1-zulu-edition setup
+cd /usr/local/src/vdr
+make plugins
+mkdir /etc/vdr/plugins/setup
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P setup|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P setup|" /usr/local/bin/vdrrun
+
+setup_menu_xml; setup_setup_xml
+
+else
+  echo "Skipping vdr-setup compile"
+fi
+#
+#
+if [ $xineliboutput = "on" ]; then
+  echo ""; echo "*** XINELIBOUTPUT ***"; echo ""
+  apt-get install -y libextractor-dev
+  cd $VDRSRC; cvs -z3 -d:pserver:anonymous@xineliboutput.cvs.sourceforge.net:/cvsroot/xineliboutput co vdr-xineliboutput
+#  wget http://vdr-portal.de/board/attachment.php?attachmentid=22531&sid=9d272d83a21f4fd9189b7b6a53669c24
+  mv vdr-xineliboutput xineliboutput; cd xineliboutput
+  $MAKE; make install
+  cd ../../../; make plugins # && make install
+  mkdir -p /etc/vdr/plugins/xineliboutput; cp *.mpg /etc/vdr/plugins/xineliboutput
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P'xineliboutput -l none -r 37890 -p'|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P'xineliboutput -l none -r 37890 -p'|" /usr/local/bin/vdrrun
+else
+  echo "Skipping XINELIBOUTPUT compile"
+fi
+#
+#
+if [ $VDR_XINE = "on" ]; then
+  echo ""; echo "*** VDR-XINE ***"; echo ""
+  cd /usr/local/src/vdr/PLUGINS/src
+  wget http://home.vrweb.de/~rnissl/vdr-$VXINE.tgz || echo "$VXINE dl failure!!!" >> $LOGFILE
+  tar xfvz vdr-$VXINE.tgz; mv $VXINE vdr-xine; cd vdr-xine
+   if [ $yaepghd = "on" ]; then
+      # enable to fully support yaepghd plugin #####
+      sed -i 's/#VDR_XINE_SET_VIDEO_WINDOW = 1/VDR_XINE_SET_VIDEO_WINDOW = 1/' Makefile
+   fi
+make
+cd ../../../; make plugins # && make install
+sudo mkdir -p /etc/vdr/plugins/xine; cd /usr/local/src/vdr/PLUGINS/src/vdr-xine/data
+sudo cp * /etc/vdr/plugins/xine
+
+sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P'xine -r'|" /usr/local/bin/runvdr
+sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P'xine -r'|" /usr/local/bin/vdrrun
+else
+  echo "Skipping VDR-XINE compile"
+fi
+#
+#
+if [ $dvdplugin = "on" ]; then
+  echo ""; echo "*** dvdplugin CVS ***"; echo ""
+  apt-get install -y libdvdnav-dev
+  cd $VDRSRC
+  cvs -z3 -d:pserver:anonymous@dvdplugin.cvs.sourceforge.net:/cvsroot/dvdplugin co -P dvd
+  cd ../../; make plugins
+else
+  echo "Skipping dvdplugin compile"
+fi
+#
+#
+if [ $vdr_remote = "on" ]; then
+  echo ""; echo "*** vdr-remote-0.4.0 ***"; echo ""
+  cd $VDRSRC
+  wget http://www.escape-edv.de/endriss/vdr/vdr-remote-0.4.0.tgz || echo "vdr-remote-0.4.0 dl failure!!!" >> $LOGFILE
+  tar xzvf vdr-remote-0.4.0.tgz; mv remote-0.4.0 remote; cd remote
+  sed -i Makefile -e 's/VDRVERSION/APIVERSION/g'
+  cd ../../../; make plugins
+    if [ "$Nexus_remote_control" = "true" ]; then
+       sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P'remote -i autodetect'|" /usr/local/bin/runvdr
+       sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P'remote -i autodetect'|" /usr/local/bin/vdrrun
+    else # LIRC REMOTE
+       sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P'remote -l /dev/lircd'|" /usr/local/bin/runvdr
+       sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P'remote -l /dev/lircd'|" /usr/local/bin/vdrrun
+    fi   
+else
+  echo "Skipping vdr-remote compile"
+fi
+#
+#
+if [ $Reelchannelscan = "on" ]; then
+  echo ""; echo "*** Reel_channelscan-0.6.1 ***"; echo ""
+  cd $VDRSRC
+  svn co svn://reelbox.org/testing/src/vdr-plugins/src/channelscan-0.6.1
+  cd ../../; make plugins
+else
+  echo "Skipping Reelchannelscan compile"
+fi
+#
+#
+if [ $NAScan = "on" ]; then
+  echo ""; echo "*** NAScan 0.3 ***"; echo ""
+  cd $VDRSRC
+  hg clone http://mercurial.intuxication.org/hg/nascan || hg clone http://mercurial.intuxication.org/hg/nascan || echo "nascan dl failure!!!" >> $LOGFILE
+  # hg clone http://freehg.org/u/fepg/nascan/
+  # and to update your local copy: hg pull
+  cd ../../; make plugins
+  mkdir /etc/vdr/plugins/nascan; cp /usr/local/src/vdr/PLUGINS/src/nascan/config/* /etc/vdr/plugins/nascan/
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P nascan|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P nascan|" /usr/local/bin/vdrrun
+else
+  echo "Skipping NAScan compile"
+fi
+#
+#
+if [ $osdteletext = "on" ]; then
+  echo ""; echo "*** osdteletext-0.8.3 ***"; echo ""
+  cd $VDRSRC
+  wget http://projects.vdr-developer.org/attachments/download/116/vdr-osdteletext-0.8.3.tgz
+  tar xzvf vdr-osdteletext-0.8.3.tgz
+  mv osdteletext-0.8.3 osdteletext
+  cd ../../
+  make plugins
+  mkdir -p /var/cache/vdr/vtx
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P osdteletext|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P osdteletext|" /usr/local/bin/vdrrun
+else
+  echo "Skipping osdteletext compile"
+fi
+#
+#
+if [ $femon = "on" ]; then
+  echo ""; echo "*** femon 1.7.2 ***"; echo ""
+  cd $VDRSRC
+  wget http://www.saunalahti.fi/~rahrenbe/vdr/femon/files/vdr-femon-1.7.2.tgz || echo "femon dl failure!!!" >> $LOGFILE
+  tar xzvf vdr-femon-1.7.2.tgz
+  mv femon-1.7.2 femon; cd ../../; make plugins
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P femon|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P femon|" /usr/local/bin/vdrrun
+else
+  echo "Skipping femon compile"
+fi
+#
+#
+if [ $Skin_Enigma = "on" ]; then
+  echo ""; echo "*** Skin Enigma ***"; echo ""
+  cd $VDRSRC; wget http://andreas.vdr-developer.org/enigmang/download/vdr-skinenigmang-0.1.0.tgz || echo "skinenigmang dl failure!!!" >> $LOGFILE
+  tar xivf vdr-skinenigmang-0.1.0.tgz; mv skinenigmang-0.1.0 skinenigmang
+  cd ../../; make plugins
+  mkdir -p /etc/vdr/plugins/skinenigmang;cd /etc/vdr/plugins; wget http://andreas.vdr-developer.org/enigmang/download/skinenigmang-logos-xpm-hi-20070702.tgz
+  wget http://andreas.vdr-developer.org/enigmang/download/skinenigmang-channellogos-xpm-hi-20070702.tgz; wget http://andreas.vdr-developer.org/enigmang/download/skinenigmang-fonts-20080225.tgz
+  tar xzvf skinenigmang-channellogos-xpm-hi-20070702.tgz; tar xzvf skinenigmang-channellogos-xpm-hi-20070702.tgz; tar xzvf skinenigmang-fonts-20080225.tgz
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P skinenigmang|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P skinenigmang|" /usr/local/bin/vdrrun
+else
+  echo "Skipping Skin Enigma compile"
+fi
+#
+#
+if [ $Skin_Reel = "on" ]; then
+echo ""; echo "*** SkinReel ***"; echo ""
+cd $VDRSRC; wget http://rsync16.de.gentoo.org/files/vdr-skinreel/vdr-skinreel-0.0.1.tgz
+tar xzvf vdr-skinreel-0.0.1.tgz; mv skinreel-0.0.1 skinreel; cd skinreel
+sed -i Makefile -e 's/VDRVERSION/APIVERSION/g'
+cp -r skinreel /etc/vdr/plugins/; cd ../../../; make plugins
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P skinreel|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P skinreel|" /usr/local/bin/vdrrun
+else
+  echo "Skipping Skin_Reel compile"
+fi
+#
+#
+if [ $SC = "on" ]; then
+  echo ""; echo "***SC***"; echo ""
+  cd $VDRSRC; sudo apt-get install -y libssl-dev subversion libbz2-dev
+  # cd /usr/local/src/vdr/PLUGINS/src/sc; svn update
+  #svn co http://opensvn.csie.org/opensascng/open-sasc-ng/sc/PLUGINS/src/sc-src sc
+  #svn co http://opensvn.csie.org/opensascng/open-sasc-ng/FFdecsa sc/FFdecsa
+  hg clone -r trunk http://85.17.209.13:6100/sc || hg clone -r trunk http://85.17.209.13:6100/sc || echo "sc dl failure!!!" >> $LOGFILE
+  #hg pull -r trunk http://85.17.209:6100/sc
+
+####################
+# 2.6.31 TempFIX ###
+####################
+if [ "$version" = "9.10" ]; then  
+  sed -i "s/-fPIC -g -O3/-fPIC -g -O2/" /usr/local/src/vdr/PLUGINS/src/sc/Makefile
+  sed -i "s/-fPIC -O3/-fPIC -O2/" /usr/local/src/vdr/PLUGINS/src/sc/FFdecsa/Makefile
+else
+  echo "2.6.31 temp fix have been skipped"
+fi
+
+
+     ################
+     # 64_bit_check #
+     ################
+     if uname -m  | grep "x86_64"; then
+       echo "64bit detected"; sed -i 's/^CPUOPT.*/CPUOPT ?= athlon64/' /usr/local/src/vdr/PLUGINS/src/sc/Makefile
+    else
+       echo "32bit"
+    fi
+     #
+  cd ../../; make plugins
+  sudo mkdir -p /etc/vdr/plugins/sc; cp -r /media/KINGSTON/appz/camfiles/* /etc/vdr/plugins/sc
+  cp /usr/local/src/vdr/PLUGINS/src/sc/examples/override.conf.example /etc/vdr/plugins/sc/override.conf
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P sc|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P sc|" /usr/local/bin/vdrrun
+else
+  echo "Skipping SC compile"
+fi
+#
+#
+if [ $Soppalusikka_Skin = "on" ]; then
+  echo ""; echo "*** Soppalusikka Skin ***"; echo ""
+  cd $VDRSRC
+  wget http://www.saunalahti.fi/~rahrenbe/vdr/soppalusikka/files/vdr-skinsoppalusikka-1.6.4.tgz || echo "skinsoppalusikka dl failure!!!" >> $LOGFILE
+  tar -xzf vdr-skinsoppalusikka-1.6.4.tgz; mv skinsoppalusikka-1.6.4 skinsoppalusikka
+  wget http://captiveworks.org/open-source/vdr-skinsoppalusikka/files/vdr-1.5.8-plugin-skinsoppalusika-1.1.1-attenuate.diff
+                     # Attenuate_patch # To TEST
+  cd skinsoppalusikka; #patch -p1 < ../vdr-1.5.8-plugin-skinsoppalusika-1.1.1-attenuate.diff && echo "Attenuate patch applied" >> $LOGFILE
+  mkdir /etc/vdr/plugins/skinsoppalusikka; mkdir /etc/vdr/plugins/themes
+  #cp -d /path/to/channel/logos/*.xpm /etc/vdr/plugins/skinsoppalusikka
+  cd ..; cp -d skinsoppalusikka/themes/*.theme /etc/vdr/plugins/themes; cd ../../
+  make plugins
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P skinsoppalusikka|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P skinsoppalusikka|" /usr/local/bin/vdrrun
+else
+  echo "Skipping Soppalusikka Skin compile"
+fi
+#
+#
+if [ $YAEPGHD = "on" ]; then
+  echo ""; echo "*** YAEPGHD ***"; echo ""
+  apt-get install -y git-core libmagick++-dev
+  cd /usr/local/src; cp -r vdr-plugin-yaepghd $VDRSRC; cd $VDRSRC
+  mv vdr-plugin-yaepghd yaepghd; cd yaepghd; make; cd ../../../
+  make plugins
+  cp -r /usr/local/src/vdr/PLUGINS/src/yaepghd/yaepghd /etc/vdr/plugins
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P yaepghd|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P yaepghd|" /usr/local/bin/vdrrun
+else
+  echo "Skipping YAEPGHD compile"
+fi
+#
+#
+if [ $StreamDev = "on" ]; then
+  echo ""; echo "*** StreamDev ***"; echo ""
+  apt-get install -y cvs
+  cd $VDRSRC
+  cvs -d:pserver:anoncvs@vdr-developer.org:/var/cvsroot co streamdev
+  sudo mkdir -p /etc/vdr/plugins/streamdev; cd streamdev; sudo cp streamdev/streamdevhosts.conf /etc/vdr/plugins/streamdev
+  sudo cp streamdev/streamdevhosts.conf /etc/vdr/vdrsvdrphosts.conf; cd ../../../
+  make plugins
+
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P streamdev-server|" /usr/local/bin/runvdr
+  sed -i "s|-s /usr/local/bin/vdrpoweroff|& -P streamdev-server|" /usr/local/bin/vdrrun
+else
+  echo "Skipping StreamDev compile"
+fi
+#
+#
+if [ $Channelswitcher = "on" ]; then
+  echo ""; echo "Channelswitcher"; echo ""
+  cd $VDRSRC
+  wget http://www.freewebs.com/sadhome/Plugin/Channelswitcher/vdr-channelswitcher-0.0.1b.tar.gz
+  tar -xvvzf vdr-channelswitcher-0.0.1b.tar.gz
+  mv channelswitcher-0.0.1b channelswitcher
+  cd channelswitcher; sed -i Makefile -e 's/VDRVERSION/APIVERSION/'
+  cd ../../../; make plugins
+else
+  echo "Skipping Channelswitcher compile"
+fi
+#
+#
+if [ $vdr_browse = "on" ]; then
+  echo ""; echo "vdr-browse-0.2.0"; echo ""
+  cd $VDRSRC
+  wget http://www.fepg.org/files/vdr-browse-0.2.0.tgz
+  tar -xvvf vdr-browse-0.2.0.tgz
+  mv browse-0.2.0 browse
+  cd ../../; make plugins
+else
+  echo "Skipping vdr-browse-0.2.0 compile"
+fi
+#
+#
+echo ""; echo "*** Final compilation ***"; echo ""
+cd /usr/local/src/vdr
+
+
+mv /usr/local/bin/runvdr /usr/local/bin/runvdr_tmp_bak
+
+
+sudo apt-get purge -y vdr
+sudo checkinstall --fstrans=no --install=yes --pkgname=vdr --pkgversion "$VDR-5ubuntu2-1" --default
+sudo mkdir /media/video; sudo mkdir -p /usr/lib/vdr/plugins; sudo mkdir -p /usr/lib/vdr/scripts; sudo mkdir -p /etc/vdr/plugins; cp -a svdrpsend.pl /usr/bin; cp *.conf /etc/vdr
+/usr/local/bin/vdr --help
+log_0_check; timer_stop >> $LOGFILE; line
+mv vdr*.deb $PACKAGES
+
+
+rm /usr/local/bin/runvdr; mv /usr/local/bin/runvdr_tmp_bak /usr/local/bin/runvdr; chmod a+x /usr/local/bin/runvdr
+
+
+####################################
+# My Remote.conf (off by default)###
+####################################
+remote_conf="off" # //default="off"(force remote plugins to detect your remote and choose your own buttons,
+                 # "on" = My Mce remote settings, You should put your own remote.conf here, if you want to enable "on" this part.
+
+if [ "$remote_conf" = "on" ]; then
+echo "
+LIRC.Up         Up
+LIRC.Down       Down
+LIRC.Menu       Enter
+LIRC.Ok         OK
+LIRC.Back       Back
+LIRC.Left       Left
+LIRC.Right      Right
+LIRC.Red        Red
+LIRC.Green      Green
+LIRC.Yellow     Yellow
+LIRC.Blue       Blue
+LIRC.0          Zero
+LIRC.1          One
+LIRC.2          Two
+LIRC.3          Three
+LIRC.4          Four
+LIRC.5          Five
+LIRC.6          Six
+LIRC.7          Seven
+LIRC.8          Eight
+LIRC.9          Nine
+LIRC.Info       More
+LIRC.Play       Play
+LIRC.Pause      Pause
+LIRC.Stop       Stop
+LIRC.Record     Record
+LIRC.FastFwd    Forward
+LIRC.FastRew    Rewind
+LIRC.Next       Skip
+LIRC.Prev       Replay
+LIRC.Power      Power
+LIRC.Channel+   ChanUp
+LIRC.Channel-   ChanDown
+LIRC.PrevChannel Clear
+LIRC.Volume+    VolUp
+LIRC.Volume-    VolDown
+LIRC.Mute       Mute
+LIRC.Audio      Music
+LIRC.Subtitles  Teletext
+LIRC.Schedule   Guide
+LIRC.Channels   LiveTV
+LIRC.Timers     DVD
+LIRC.Recordings RecTV
+LIRC.Setup      Aspect
+LIRC.User1      Home" >> /etc/vdr/remote.conf
+
+else
+echo "/etc/vdr/remote.conf skipped"
+fi
+
+####################################
+# My setup.conf (off by default) ###
+####################################
+setup_conf="on"    # //default="off ???"
+
+if [ "$setup_conf" = "on" ]; then
+echo "
+AntiAlias = 1
+AudioLanguages =
+ChannelEntryTimeout = 2000
+ChannelInfoPos = 0
+ChannelInfoTime = 5
+CurrentChannel = 111
+CurrentDolby = 0
+CurrentVolume = 255
+DefaultLifetime = 99
+DefaultPriority = 50
+DiSEqC = 0
+DisplaySubtitles = 0
+EmergencyExit = 1
+EPGBugfixLevel = 3
+EPGLanguages =
+EPGLinger = 0
+EPGScanTimeout = 5
+FontFix = Courier:Bold
+FontFixSize = 18
+FontFixSizeP = 0.031000
+FontOsd = Sans Serif:Bold
+FontOsdSize = 22
+FontOsdSizeP = 0.038000
+FontSml = Sans Serif
+FontSmlSize = 20
+FontSmlSizeP = 0.035000
+InitialChannel = 0
+InitialVolume = -1
+InstantRecordTime = 180
+LnbFrequHi = 11250
+LnbFrequLo = 11250
+LnbSLOF = 0
+MarginStart = 2
+MarginStop = 10
+MarkInstantRecord = 1
+MaxVideoFileSize = 2000
+MenuKeyCloses = 0
+MenuScrollPage = 1
+MenuScrollWrap = 0
+MinEventTimeout = 30
+MinUserInactivity = 0
+MultiSpeedMode = 0
+NameInstantRecord = TITLE EPISODE
+NextWakeupTime = 0
+OSDAspect = 1.066667
+OSDHeight = 484
+OSDHeightP = 0.840000
+OSDLanguage = en_US
+OSDLeft = 58
+OSDLeftP = 0.080000
+OSDMessageTime = 1
+OSDSkin = soppalusikka
+OSDTheme = default
+OSDTop = 46
+OSDTopP = 0.080000
+OSDWidth = 624
+OSDWidthP = 0.870000
+PauseKeyHandling = 2
+PauseLifetime = 1
+PausePriority = 10
+PrimaryDVB = 2
+PrimaryLimit = 0
+RecordingDirs = 1
+ResumeID = 0
+SetSystemTime = 0
+ShowInfoOnChSwitch = 1
+ShowReplayMode = 0
+SplitEditedFiles = 0
+SubtitleBgTransparency = 0
+SubtitleFgTransparency = 0
+SubtitleLanguages =
+SubtitleOffset = 0
+SVDRPTimeout = 300
+TimeoutRequChInfo = 1
+TimeSource = 0
+TimeTransponder = 0
+UpdateChannels = 5
+UseDolbyDigital = 1
+UseSmallFont = 1
+UseSubtitle = 1
+UseVps = 0
+VideoDisplayFormat = 1
+VideoFormat = 0
+VpsMargin = 120
+ZapTimeout = 3
+streamdev-client.HideMenuEntry = 0
+streamdev-client.MaxPriority = 99
+streamdev-client.MinPriority = -1
+streamdev-client.RemoteIp = 192.168.0.103
+streamdev-client.RemotePort = 2004
+streamdev-client.StartClient = 1
+streamdev-client.StreamFilters = 0
+streamdev-client.SyncEPG = 1" >> /etc/vdr/setup.conf
+
+else
+  echo "setup.conf skipped"
+fi
+         
+##########################
+#                      ###
+#  VDR CONFIGURATIONS  ###
+#                      ###
+##########################
+timer_start
+
+echo "vdr configurations" >> $LOGFILE
+echo "*** svdrphosts.conf setup ***"; rm /etc/vdr/svdrphosts.conf; touch /etc/vdr/svdrphosts.conf
+echo "#
+# svdrphosts    This file describes a number of host addresses that
+#               are allowed to connect to the SVDRP port of the Video
+#               Disk Recorder (VDR) running on this system.
+# Syntax:
+#
+# IP-Address[/Netmask]
+#
+
+127.0.0.1             # always accept localhost
+192.168.0.0/24     # any host on the local net
+#204.152.189.113      # a specific host
+#0.0.0.0/0            # any host on any net (USE THIS WITH CARE!)" >> /etc/vdr/svdrphosts.conf
+sudo nano -w /etc/vdr/svdrphosts.conf && echo "*** diseqc.conf setup ***"
+# DISEQC.conf
+rm /etc/vdr/diseqc.conf; touch /etc/vdr/diseqc.conf
+echo "## DishPro LNB Config
+## Sample DishPro diseqc.conf  You will need to substitute the # signs with
+## the Satellite you are trying to add.  It must match what is in your
+## sources.conf
+#
+# THIS EXAMPLE WORKS FOR A DISH_1000.2 LNBF:
+# Port 1
+S119.0W 99999 V 11250 t v W15 [E0 10 38 F1]
+S119.0W 99999 H 14350 t V W15 [E0 10 38 F1]
+
+# Port 2
+S110.0W 99999 V 11250 t v W15 [E0 10 38 F5]
+S110.0W 99999 H 14350 t V W15 [E0 10 38 F5]
+
+
+# Port 3
+S129.0W 99999 V 11250 t v W15 [E0 10 38 F9]
+S129.0W 99999 H 14350 t V W15 [E0 10 38 F9]
+
+##DISH LEGACY SETUP
+## Satellite you are trying to add.  It must match what is in your
+## sources.conf
+
+# Port 1
+#S91.0W 99999 V 11250 t v W15 [E0 10 38 F1]
+#S91.0W 99999 H 11250 t V W15 [E0 10 38 F3]
+
+# Port 2
+#S82.0W 99999 V 11250 t v W15 [E0 10 38 F5]
+#S82.0W 99999 H 11250 t V W15 [E0 10 38 F7] " >> /etc/vdr/diseqc.conf
+sudo nano -w /etc/vdr/diseqc.conf && echo "*** keymacros.conf setup ***";
+# KEYMACROS.conf
+rm /etc/vdr/keymacros.conf; touch /etc/vdr/keymacros.conf
+echo "# Remote control key macros for VDR
+# I HAVE ADD FOR YOU yaepghd ON BLUE KEY ###
+# Format:
+#
+# macrokey  key1 key2 key3...
+# macrokey  @plugin key1 key2 key3...
+#
+# See man vdr(5)
+
+Red       Recordings
+Green     Schedule
+Yellow    Info
+Blue      Timers
+User1     @yaepghd" >> /etc/vdr/keymacros.conf
+sudo nano -w /etc/vdr/keymacros.conf
+
+if [ $NAScan = "on" ]; then
+sudo nano -w /etc/vdr/plugins/nascan/sources.conf
+fi
+
+
+# MAKE SURE ALSA MIXER ISN'T MUTED
+amixer set Master 100% unmute
+amixer set Front 100% unmute
+amixer set IEC958 unmute
+amixer set PCM 100% unmute
+
+timer_stop; line
+clear; echo "Finished:" >> $LOGFILE; date >> $LOGFILE
+sc_check; echo ""; echo ""; echo "*** To complete the install type: reboot ***"; echo ""; exit 0
+
+
+;;
+
+
+     ###########################################
+5.1) # Remove VDR & plugins & configurations ###
+     ###########################################
+dpkg -r vdr
+rm -r /etc/vdr
+rm /usr/local/bin/vdrrun; rm /usr/local/bin/runvdr
+cd $SRC; rm -r vdr $VDR vdr-plugin-yaepghd $VXINE
+rm $VDR.tar.bz2 $VXINE.tgz vdr-1.5.9-dn-eit.0.3.3.diff
+rm $PACKAGES/vdr*.deb
+echo "[7] Remove VDR & plugins & configurations" >> $LOGFILE
+echo "Finished:" >> $LOGFILE; date >> $LOGFILE; line
+;;
+
+   ###########
+6) # NSCAN ###
+   ###########
+date >> $LOGFILE
+cp /home/$USR/Desktop/nscan-2.0.7.tar.bz2 || cp $USB/appz/nscan/nscan-2.0.7.tar.bz2 $SRC
+if [ -f $SRC/nscan-2.0.7.tar.bz2 ]; then
+   echo "OK Nscan_check_file"; else
+     echo "Nscan_check FAILED" >> $LOGFILE
+     clear; echo ""
+     echo "##############################################################################################"
+     echo "# ---------------!!! COULD NOT DETECT Nscan-2.0.7 FILE ...!!!"
+     echo "# - YOU MUST DOWNLOAD Nscan-2.0.7 BEFORE COMPILING IT  ...!!!"
+     echo "#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+     echo "# - Link to Nscan-2.0.7 thread: http://dvbn.happysat.org/viewtopic.php?f=17&t=50912&start=0"
+     echo "# - You should have a download link there on the first post"
+     echo "# - DOWNLOAD Nscan-2.0.7 WITH MOZILLA TO YOUR DESKTOP AND THEN RE-EXECUTE THIS INSTAL STEP"
+     echo "##############################################################################################"
+     echo "" 
+     press_enter; exit 1
+fi
+if  [ -d $V4LDVB ]; then
+    echo "$V4LDVB is there"; else
+    echo "V4L-DVB ERROR CHECK FAIL TO DETECT YOUR FOLDER"; echo "Press [enter] key to continue. . ."; read enterKey; exit 0
+fi
+# Compile nscan
+if [ -f $PACKAGES/nscan2.0.7*.deb ]; then
+    echo "Package is there, skip compilation"
+else # compile
+    apt-get install -y checkinstall
+    cd $SRC; mkdir /etc/vdr; tar xivf nscan-2.0.7.tar.bz2; mv nscan-2.0.7 nscan; cd nscan
+    echo "[8] Nscan compilation" >> $LOGFILE
+
+# 64_bit_check & fix
+if uname -m | grep "x86_64"; then
+    echo "64bit"
+    sed -i 's/(u_int)/(u_long)/' $SRC/nscan/nutils.c
+    sed -i 's/(int)/(long)/' $SRC/nscan/nsdt.c
+    sed -i 's/(int)/(long)/' $SRC/nscan/nnit.c
+    sed -i 's/(int)/(long)/g' $SRC/nscan/nscan.c
+else
+    echo "32 bit"
+fi
+
+    make && sudo checkinstall --pkgname=nscan2.0.7 --default
+    log_0_check; press_enter
+    mv nscan2.0.7*.deb $PACKAGES
+fi
+killall vdr
+while :
+do
+    clear
+    echo "------------------------------------------------------------"
+    echo "                     NSCAN-2.0.7 "
+    echo "------------------------------------------------------------"
+    echo
+    echo "[1] DishPro & DishProPlus 119-110-129w"
+    echo "[2] Legacy Lnbf-110-119-129w"
+    echo "[3] DishPro x2 Lnbf Bev-82-91w OR Dish-110-119w"
+    echo "[4] Legacy x2 Lnbf-82-91w OR Dish-110-119w"
+    echo "[5] 129w only"
+    echo "[6] 1 DishPro Lnbf"
+    echo "[7] 1 Legacy Lnbf"
+    echo "[8] Exit/Stop"
+    echo "============================================================"
+echo ""; echo "IF no preset available for your setup you can use the scan script that come with nscan-2.0.7 and edit your own"; echo ""
+    echo
+    echo -n "Enter your menu choice [1-8]: "
+    read yourch
+    case $yourch in
+1)timer_start
+scan_array=(
+#      "nscan command line........" "padding"
+        "0 12239 l 20000 1 9 2 5 0" "0"
+        "1 12239 l 20000 1 9 2 5 0" "0"
+        "2 12545 r 21500 2 9 2 5 0" "0"
+)
+;;
+2)timer_start
+scan_array=(
+#      "nscan command line........" "padding"
+        "0 12224 v 20000 1 9 0 5 0" "0"
+        "1 12224 v 20000 1 9 0 5 0" "0"
+        "2 12545 r 21500 2 9 0 5 0" "0"
+)
+;;
+3)timer_start
+scan_array=(
+#      "nscan command line........" "padding"
+        "0 12239 l 20000 1 9 2 5 0" "0"
+        "1 12239 l 20000 1 9 2 5 0" "0"
+)
+;;
+4)timer_start
+scan_array=(
+#      "nscan command line........" "padding"
+        "0 12239 l 20000 1 9 0 5 0" "0"
+        "1 12239 l 20000 1 9 0 5 0" "0"
+)
+;;
+5)timer_start
+scan_array=(
+#      "nscan command line........" "padding"
+        "2 12486 r 21500 2 9 2 5 0" "0"
+)
+;;
+6)timer_start
+scan_array=(
+#      "nscan command line........" "padding"
+        "0 12239 l 20000 1 9 2 5 0" "0"
+)
+;;
+7)timer_start
+scan_array=(
+#      "nscan command line........" "padding"
+        "0 12239 l 20000 1 9 0 5 0" "0"
+)
+;;
+8) timer_stop; echo "exit"; exit 0
+;;
+*) ;;
+esac
+
+
+let SEQ_MAX="${#scan_array[@]}"-1
+for INDEX in `seq 0 2 $SEQ_MAX`; do
+        FILE="/tmp/scan-index$INDEX.tmp"
+        let PORT=`echo ${scan_array[$INDEX]} |cut -d' ' -f1`+1
+        echo -en "\nscanning port $PORT: "
+        $NSCAN ${scan_array[$INDEX]} >$FILE
+        echo "found `cat $FILE |wc -l` channels at `cat $FILE |cut -d: -f4 |head -1`"
+        let PADDING="${scan_array[$INDEX+1]}"
+        if [ "$PADDING" -gt "0" ]; then
+                echo "padding with $PADDING"
+                cat $FILE |awk -v PAD=$PADDING 'BEGIN { OFS=FS=":" } { $NF+=PAD; print $0 }' >$FILE.pad
+                mv $FILE.pad $FILE
+        fi
+        cat $FILE >>/tmp/$CONF.tmp
+done
+echo "TOTAL CHANNELS: `cat /tmp/$CONF.tmp |wc -l`"
+cat /tmp/$CONF.tmp |sort -n -t : -k 13 |uniq |awk 'BEGIN { FS=":" } { printf(":@%s\n%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s\n", \
+$13, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 ); }' >$CFGDIR/$CONF
+echo "wrote $CFGDIR/channels.conf"
+
+cd /etc/vdr
+#Channels.conf just created back-up
+cp channels.conf.2* channels-bak.conf
+timestamp=`date +%Y%m%d.%R`
+mv channels-bak.conf channels-bak.conf$timestamp
+sudo rm /etc/vdr/channels.conf
+mv channels.conf.2* channels.conf
+timer_stop; press_enter
+done
+;;
+
+
+6.1)  # TO REMOVE NSCAN
+dpkg -r nscan2.0.7; cd /usr/local/src; rm nscan*.tar.bz2; rm -r nscan-2.0.7
+;;
+
+
+7)
+echo "Exit-Stopped" >> $LOGFILE; date >> $LOGFILE; line;  exit 0
+;;
+*) ;;
+esac
+done
